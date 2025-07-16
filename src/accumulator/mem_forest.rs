@@ -1064,22 +1064,42 @@ mod test {
             .iter()
             .map(|pos| hashes[*pos as usize])
             .collect::<Vec<_>>();
-        let mut p = MemForest::new();
-        p.modify(&hashes, &[]).expect("Test mem_forests are valid");
-        p.modify(&[], &dels).expect("still should be valid");
+        
+        // Test regular modify
+        let mut p_regular = MemForest::new();
+        p_regular.modify(&hashes, &[]).expect("Test mem_forests are valid");
+        p_regular.modify(&[], &dels).expect("still should be valid");
 
-        assert_eq!(p.get_roots().len(), case.expected_roots.len());
+        // Test optimized modify
+        let mut p_optimized = MemForest::new();
+        p_optimized.modify(&hashes, &[]).expect("Test mem_forests are valid");
+        p_optimized.modify_optimized(&[], &dels).expect("still should be valid");
+
+        // Both should produce the same results
+        assert_eq!(p_regular.get_roots().len(), case.expected_roots.len());
+        assert_eq!(p_optimized.get_roots().len(), case.expected_roots.len());
+        
         let expected_roots = case
             .expected_roots
             .iter()
             .map(|root| BitcoinNodeHash::from_str(root).unwrap())
             .collect::<Vec<_>>();
-        let roots = p
+        
+        let roots_regular = p_regular
             .get_roots()
             .iter()
             .map(|root| root.data.get())
             .collect::<Vec<_>>();
-        assert_eq!(expected_roots, roots, "Test case failed {:?}", case);
+            
+        let roots_optimized = p_optimized
+            .get_roots()
+            .iter()
+            .map(|root| root.data.get())
+            .collect::<Vec<_>>();
+        
+        assert_eq!(expected_roots, roots_regular, "Regular modify test case failed {:?}", case);
+        assert_eq!(expected_roots, roots_optimized, "Optimized modify test case failed {:?}", case);
+        assert_eq!(roots_regular, roots_optimized, "Regular and optimized results differ for case {:?}", case);
     }
 
     #[test]
