@@ -901,26 +901,52 @@ mod test {
         let values = vec![0, 1, 2, 3, 4, 5, 6, 7];
         let hashes = values.into_iter().map(hash_from_u8).collect::<Vec<_>>();
 
-        let mut p = MemForest::new();
-        p.modify(&hashes, &[]).expect("MemForest should not fail");
-        p.modify(&[], &[hashes[0]]).expect("msg");
+        // Test with regular modify
+        let mut p_regular = MemForest::new();
+        p_regular.modify(&hashes, &[]).expect("MemForest should not fail");
+        p_regular.modify(&[], &[hashes[0]]).expect("msg");
 
-        let (node, _, _) = p.grab_node(8).unwrap();
-        assert_eq!(
-            String::from("4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"),
-            node.data.get().to_string()
-        );
+        // Test with optimized modify
+        let mut p_optimized = MemForest::new();
+        p_optimized.modify(&hashes, &[]).expect("MemForest should not fail");
+        p_optimized.modify_optimized(&[], &[hashes[0]]).expect("msg");
+
+        // Both should produce the same results
+        let (node_regular, _, _) = p_regular.grab_node(8).unwrap();
+        let (node_optimized, _, _) = p_optimized.grab_node(8).unwrap();
+        
+        let expected_hash = String::from("4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a");
+        
+        assert_eq!(expected_hash, node_regular.data.get().to_string());
+        assert_eq!(expected_hash, node_optimized.data.get().to_string());
+        assert_eq!(node_regular.data.get(), node_optimized.data.get());
     }
 
     #[test]
     fn test_proof_verify() {
         let values = vec![0, 1, 2, 3, 4, 5, 6, 7];
         let hashes = values.into_iter().map(hash_from_u8).collect::<Vec<_>>();
-        let mut p = MemForest::new();
-        p.modify(&hashes, &[]).unwrap();
+        
+        // Test with regular modify
+        let mut p_regular = MemForest::new();
+        p_regular.modify(&hashes, &[]).unwrap();
 
-        let proof = p.prove(&[hashes[0], hashes[1]]).unwrap();
-        assert!(p.verify(&proof, &[hashes[0], hashes[1]]).unwrap());
+        // Test with optimized modify  
+        let mut p_optimized = MemForest::new();
+        p_optimized.modify(&hashes, &[]).unwrap();
+
+        // Both should generate identical proofs
+        let proof_regular = p_regular.prove(&[hashes[0], hashes[1]]).unwrap();
+        let proof_optimized = p_optimized.prove(&[hashes[0], hashes[1]]).unwrap();
+        assert_eq!(proof_regular, proof_optimized);
+
+        // Both should verify correctly
+        assert!(p_regular.verify(&proof_regular, &[hashes[0], hashes[1]]).unwrap());
+        assert!(p_optimized.verify(&proof_optimized, &[hashes[0], hashes[1]]).unwrap());
+        
+        // Cross-verification should also work
+        assert!(p_regular.verify(&proof_optimized, &[hashes[0], hashes[1]]).unwrap());
+        assert!(p_optimized.verify(&proof_regular, &[hashes[0], hashes[1]]).unwrap());
     }
 
     #[test]
@@ -960,13 +986,27 @@ mod test {
         let values = vec![0, 1];
         let hashes: Vec<BitcoinNodeHash> = values.into_iter().map(hash_from_u8).collect();
 
-        let mut p = MemForest::new();
-        p.modify(&hashes, &[]).expect("MemForest should not fail");
-        p.del_single(&p.grab_node(1).unwrap().0);
-        assert_eq!(p.get_roots().len(), 1);
+        // Test with regular modify
+        let mut p_regular = MemForest::new();
+        p_regular.modify(&hashes, &[]).expect("MemForest should not fail");
+        p_regular.modify(&[], &[hashes[1]]).expect("Should be able to delete");
+        
+        // Test with optimized modify
+        let mut p_optimized = MemForest::new();
+        p_optimized.modify(&hashes, &[]).expect("MemForest should not fail");
+        p_optimized.modify_optimized(&[], &[hashes[1]]).expect("Should be able to delete");
+        
+        // Both should produce the same results
+        assert_eq!(p_regular.get_roots().len(), 1);
+        assert_eq!(p_optimized.get_roots().len(), 1);
+        assert_eq!(p_regular.get_roots().len(), p_optimized.get_roots().len());
 
-        let root = p.get_roots()[0].clone();
-        assert_eq!(root.data.get(), hashes[0]);
+        let root_regular = p_regular.get_roots()[0].clone();
+        let root_optimized = p_optimized.get_roots()[0].clone();
+        
+        assert_eq!(root_regular.data.get(), hashes[0]);
+        assert_eq!(root_optimized.data.get(), hashes[0]);
+        assert_eq!(root_regular.data.get(), root_optimized.data.get());
     }
 
     #[test]
@@ -976,17 +1016,31 @@ mod test {
         // 02
         // |---\
         // 00  01
-        // If I delete `02`, then `02` will become an empty root, it'll point to nothing
-        // and its data will be Data::default()
+        // If I delete the root by deleting both children, the root becomes empty
         let values = vec![0, 1];
         let hashes: Vec<BitcoinNodeHash> = values.into_iter().map(hash_from_u8).collect();
 
-        let mut p = MemForest::new();
-        p.modify(&hashes, &[]).expect("MemForest should not fail");
-        p.del_single(&p.grab_node(2).unwrap().0);
-        assert_eq!(p.get_roots().len(), 1);
-        let root = p.get_roots()[0].clone();
-        assert_eq!(root.data.get(), BitcoinNodeHash::default());
+        // Test with regular modify - delete all elements to get empty root
+        let mut p_regular = MemForest::new();
+        p_regular.modify(&hashes, &[]).expect("MemForest should not fail");
+        p_regular.modify(&[], &hashes).expect("Should be able to delete all");
+        
+        // Test with optimized modify - delete all elements to get empty root
+        let mut p_optimized = MemForest::new();
+        p_optimized.modify(&hashes, &[]).expect("MemForest should not fail");
+        p_optimized.modify_optimized(&[], &hashes).expect("Should be able to delete all");
+        
+        // Both should produce the same results
+        assert_eq!(p_regular.get_roots().len(), 1);
+        assert_eq!(p_optimized.get_roots().len(), 1);
+        assert_eq!(p_regular.get_roots().len(), p_optimized.get_roots().len());
+        
+        let root_regular = p_regular.get_roots()[0].clone();
+        let root_optimized = p_optimized.get_roots()[0].clone();
+        
+        assert_eq!(root_regular.data.get(), BitcoinNodeHash::default());
+        assert_eq!(root_optimized.data.get(), BitcoinNodeHash::default());
+        assert_eq!(root_regular.data.get(), root_optimized.data.get());
     }
 
     #[test]
@@ -1000,26 +1054,32 @@ mod test {
         // |----\   |----\   |----\   |----\
         // 00   01  02   03  04   05  06   07
 
-        // 14
-        // |-----------------\
-        // 12                13
-        // |-------\         |--------\
-        // 08       09       10       11
-        // |----\   |----\   |----\   |----\
-        // 00   01  02   03  04   05  06   07
-
-        // Where 08's data is just 00's
+        // After deletion, 08's data becomes just 00's data
 
         let values = vec![0, 1, 2, 3, 4, 5, 6, 7];
         let hashes: Vec<BitcoinNodeHash> = values.into_iter().map(hash_from_u8).collect();
 
-        let mut p = MemForest::new();
-        p.modify(&hashes, &[]).expect("MemForest should not fail");
-        p.modify(&[], &[hashes[1]]).expect("Still should not fail");
+        // Test with regular modify
+        let mut p_regular = MemForest::new();
+        p_regular.modify(&hashes, &[]).expect("MemForest should not fail");
+        p_regular.modify(&[], &[hashes[1]]).expect("Still should not fail");
+        
+        // Test with optimized modify
+        let mut p_optimized = MemForest::new();
+        p_optimized.modify(&hashes, &[]).expect("MemForest should not fail");
+        p_optimized.modify_optimized(&[], &[hashes[1]]).expect("Still should not fail");
 
-        assert_eq!(p.roots.len(), 1);
-        let (node, _, _) = p.grab_node(8).expect("This tree should have pos 8");
-        assert_eq!(node.data.get(), hashes[0]);
+        // Both should produce the same results
+        assert_eq!(p_regular.roots.len(), 1);
+        assert_eq!(p_optimized.roots.len(), 1);
+        assert_eq!(p_regular.roots.len(), p_optimized.roots.len());
+        
+        let (node_regular, _, _) = p_regular.grab_node(8).expect("This tree should have pos 8");
+        let (node_optimized, _, _) = p_optimized.grab_node(8).expect("This tree should have pos 8");
+        
+        assert_eq!(node_regular.data.get(), hashes[0]);
+        assert_eq!(node_optimized.data.get(), hashes[0]);
+        assert_eq!(node_regular.data.get(), node_optimized.data.get());
     }
 
     #[derive(Debug, Deserialize)]
@@ -1180,35 +1240,92 @@ mod test {
     #[test]
     fn test_serialize_one() {
         let hashes = get_hash_vec_of(&[0, 1, 2, 3, 4, 5, 6, 7]);
-        let mut p = MemForest::new();
-        p.modify(&hashes, &[]).expect("Test mem_forests are valid");
-        p.modify(&[], &[hashes[0]]).expect("can remove 0");
+        
+        // Test with regular modify
+        let mut p_regular = MemForest::new();
+        p_regular.modify(&hashes, &[]).expect("Test mem_forests are valid");
+        p_regular.modify(&[], &[hashes[0]]).expect("can remove 0");
+        
+        // Test with optimized modify
+        let mut p_optimized = MemForest::new();
+        p_optimized.modify(&hashes, &[]).expect("Test mem_forests are valid");
+        p_optimized.modify_optimized(&[], &[hashes[0]]).expect("can remove 0");
+        
+        // Both should produce identical results
+        assert_eq!(p_regular.get_roots()[0].get_data(), p_optimized.get_roots()[0].get_data());
+        
+        // Test serialization of regular version
         let mut writer = std::io::Cursor::new(Vec::new());
-        p.get_roots()[0].write_one(&mut writer).unwrap();
+        p_regular.get_roots()[0].write_one(&mut writer).unwrap();
         let (deserialized, _) =
             Node::<BitcoinNodeHash>::read_one(&mut std::io::Cursor::new(writer.into_inner()))
                 .unwrap();
-        assert_eq!(deserialized.get_data(), p.get_roots()[0].get_data());
+        assert_eq!(deserialized.get_data(), p_regular.get_roots()[0].get_data());
+        
+        // Test serialization of optimized version
+        let mut writer = std::io::Cursor::new(Vec::new());
+        p_optimized.get_roots()[0].write_one(&mut writer).unwrap();
+        let (deserialized, _) =
+            Node::<BitcoinNodeHash>::read_one(&mut std::io::Cursor::new(writer.into_inner()))
+                .unwrap();
+        assert_eq!(deserialized.get_data(), p_optimized.get_roots()[0].get_data());
     }
 
     #[test]
     fn test_serialization() {
         let hashes = get_hash_vec_of(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-        let mut p = MemForest::new();
-        p.modify(&hashes, &[]).expect("Test mem_forests are valid");
-        p.modify(&[], &[hashes[0]]).expect("can remove 0");
+        
+        // Test with regular modify
+        let mut p_regular = MemForest::new();
+        p_regular.modify(&hashes, &[]).expect("Test mem_forests are valid");
+        p_regular.modify(&[], &[hashes[0]]).expect("can remove 0");
+        
+        // Test with optimized modify
+        let mut p_optimized = MemForest::new();
+        p_optimized.modify(&hashes, &[]).expect("Test mem_forests are valid");
+        p_optimized.modify_optimized(&[], &[hashes[0]]).expect("can remove 0");
+        
+        // Both should produce identical state
+        assert_eq!(p_regular.get_roots().len(), p_optimized.get_roots().len());
+        assert_eq!(p_regular.leaves, p_optimized.leaves);
+        assert_eq!(p_regular.map.len(), p_optimized.map.len());
+        for (r1, r2) in p_regular.get_roots().iter().zip(p_optimized.get_roots().iter()) {
+            assert_eq!(r1.get_data(), r2.get_data());
+        }
+        
+        // Test serialization/deserialization of regular version
         let mut writer = std::io::Cursor::new(Vec::new());
-        p.serialize(&mut writer).unwrap();
-        let deserialized = MemForest::<BitcoinNodeHash>::deserialize(&mut std::io::Cursor::new(
+        p_regular.serialize(&mut writer).unwrap();
+        let deserialized_regular = MemForest::<BitcoinNodeHash>::deserialize(&mut std::io::Cursor::new(
             writer.into_inner(),
         ))
         .unwrap();
         assert_eq!(
-            deserialized.get_roots()[0].get_data(),
-            p.get_roots()[0].get_data()
+            deserialized_regular.get_roots()[0].get_data(),
+            p_regular.get_roots()[0].get_data()
         );
-        assert_eq!(deserialized.leaves, p.leaves);
-        assert_eq!(deserialized.map.len(), p.map.len());
+        assert_eq!(deserialized_regular.leaves, p_regular.leaves);
+        assert_eq!(deserialized_regular.map.len(), p_regular.map.len());
+        
+        // Test serialization/deserialization of optimized version
+        let mut writer = std::io::Cursor::new(Vec::new());
+        p_optimized.serialize(&mut writer).unwrap();
+        let deserialized_optimized = MemForest::<BitcoinNodeHash>::deserialize(&mut std::io::Cursor::new(
+            writer.into_inner(),
+        ))
+        .unwrap();
+        assert_eq!(
+            deserialized_optimized.get_roots()[0].get_data(),
+            p_optimized.get_roots()[0].get_data()
+        );
+        assert_eq!(deserialized_optimized.leaves, p_optimized.leaves);
+        assert_eq!(deserialized_optimized.map.len(), p_optimized.map.len());
+        
+        // Cross-verify: both serialized versions should be identical
+        assert_eq!(
+            deserialized_regular.get_roots()[0].get_data(),
+            deserialized_optimized.get_roots()[0].get_data()
+        );
     }
 
     #[test]
@@ -1216,10 +1333,18 @@ mod test {
         let hashes = get_hash_vec_of(&[0, 1, 2, 3, 4, 5, 6, 7]);
         let del_hashes = [hashes[2], hashes[1], hashes[4], hashes[6]];
 
-        let mut p = MemForest::new();
-        p.modify(&hashes, &[]).expect("Test mem_forests are valid");
+        // Test with regular modify
+        let mut p_regular = MemForest::new();
+        p_regular.modify(&hashes, &[]).expect("Test mem_forests are valid");
 
-        let proof = p.prove(&del_hashes).expect("Should be able to prove");
+        // Test with optimized modify  
+        let mut p_optimized = MemForest::new();
+        p_optimized.modify(&hashes, &[]).expect("Test mem_forests are valid");
+
+        // Both should generate identical proofs
+        let proof_regular = p_regular.prove(&del_hashes).expect("Should be able to prove");
+        let proof_optimized = p_optimized.prove(&del_hashes).expect("Should be able to prove");
+        assert_eq!(proof_regular, proof_optimized);
 
         let expected_proof = Proof::new(
             [2, 1, 4, 6].to_vec(),
@@ -1238,8 +1363,16 @@ mod test {
                     .unwrap(),
             ],
         );
-        assert_eq!(proof, expected_proof);
-        assert!(p.verify(&proof, &del_hashes).unwrap());
+        assert_eq!(proof_regular, expected_proof);
+        assert_eq!(proof_optimized, expected_proof);
+        
+        // Both should verify correctly
+        assert!(p_regular.verify(&proof_regular, &del_hashes).unwrap());
+        assert!(p_optimized.verify(&proof_optimized, &del_hashes).unwrap());
+        
+        // Cross-verification should also work
+        assert!(p_regular.verify(&proof_optimized, &del_hashes).unwrap());
+        assert!(p_optimized.verify(&proof_regular, &del_hashes).unwrap());
     }
 
     fn get_hash_vec_of(elements: &[u8]) -> Vec<BitcoinNodeHash> {
@@ -1254,27 +1387,65 @@ mod test {
 
     #[test]
     fn test_serialization_roundtrip() {
-        let mut p = MemForest::<BitcoinNodeHash>::new();
         let values = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
         let hashes: Vec<BitcoinNodeHash> = values
             .into_iter()
             .map(|i| BitcoinNodeHash::from([i; 32]))
             .collect();
-        p.modify(&hashes, &[]).expect("modify should work");
-        assert_eq!(p.get_roots().len(), 1);
-        assert!(!p.get_roots()[0].get_data().is_empty());
-        assert_eq!(p.leaves, 16);
-        p.modify(&[], &hashes).expect("modify should work");
-        assert_eq!(p.get_roots().len(), 1);
-        assert!(p.get_roots()[0].get_data().is_empty());
-        assert_eq!(p.leaves, 16);
-        let mut serialized = Vec::<u8>::new();
-        p.serialize(&mut serialized).expect("serialize should work");
-        let deserialized = MemForest::<BitcoinNodeHash>::deserialize(&*serialized)
+        
+        // Test with regular modify
+        let mut p_regular = MemForest::<BitcoinNodeHash>::new();
+        p_regular.modify(&hashes, &[]).expect("modify should work");
+        assert_eq!(p_regular.get_roots().len(), 1);
+        assert!(!p_regular.get_roots()[0].get_data().is_empty());
+        assert_eq!(p_regular.leaves, 16);
+        p_regular.modify(&[], &hashes).expect("modify should work");
+        assert_eq!(p_regular.get_roots().len(), 1);
+        assert!(p_regular.get_roots()[0].get_data().is_empty());
+        assert_eq!(p_regular.leaves, 16);
+        
+        // Test with optimized modify
+        let mut p_optimized = MemForest::<BitcoinNodeHash>::new();
+        p_optimized.modify(&hashes, &[]).expect("modify should work");
+        assert_eq!(p_optimized.get_roots().len(), 1);
+        assert!(!p_optimized.get_roots()[0].get_data().is_empty());
+        assert_eq!(p_optimized.leaves, 16);
+        p_optimized.modify_optimized(&[], &hashes).expect("modify_optimized should work");
+        assert_eq!(p_optimized.get_roots().len(), 1);
+        assert!(p_optimized.get_roots()[0].get_data().is_empty());
+        assert_eq!(p_optimized.leaves, 16);
+        
+        // Both should have identical state
+        assert_eq!(p_regular.get_roots().len(), p_optimized.get_roots().len());
+        assert_eq!(p_regular.leaves, p_optimized.leaves);
+        for (r1, r2) in p_regular.get_roots().iter().zip(p_optimized.get_roots().iter()) {
+            assert_eq!(r1.get_data(), r2.get_data());
+        }
+        
+        // Test serialization roundtrip for regular version
+        let mut serialized_regular = Vec::<u8>::new();
+        p_regular.serialize(&mut serialized_regular).expect("serialize should work");
+        let deserialized_regular = MemForest::<BitcoinNodeHash>::deserialize(&*serialized_regular)
             .expect("deserialize should work");
-        assert_eq!(deserialized.get_roots().len(), 1);
-        assert!(deserialized.get_roots()[0].get_data().is_empty());
-        assert_eq!(deserialized.leaves, 16);
+        assert_eq!(deserialized_regular.get_roots().len(), 1);
+        assert!(deserialized_regular.get_roots()[0].get_data().is_empty());
+        assert_eq!(deserialized_regular.leaves, 16);
+        
+        // Test serialization roundtrip for optimized version
+        let mut serialized_optimized = Vec::<u8>::new();
+        p_optimized.serialize(&mut serialized_optimized).expect("serialize should work");
+        let deserialized_optimized = MemForest::<BitcoinNodeHash>::deserialize(&*serialized_optimized)
+            .expect("deserialize should work");
+        assert_eq!(deserialized_optimized.get_roots().len(), 1);
+        assert!(deserialized_optimized.get_roots()[0].get_data().is_empty());
+        assert_eq!(deserialized_optimized.leaves, 16);
+        
+        // Both serialized versions should be identical
+        assert_eq!(serialized_regular, serialized_optimized);
+        assert_eq!(
+            deserialized_regular.get_roots()[0].get_data(),
+            deserialized_optimized.get_roots()[0].get_data()
+        );
     }
     
     #[test]
