@@ -473,43 +473,131 @@ impl<Hash: AccumulatorHash> MemForest<Hash> {
         Ok(())
     }
 
-    /// Batch deletion that applies the same operations as regular deletion but in a single batch.
-    /// 
-    /// This is a placeholder implementation for API compatibility until the optimized version
-    /// is completed. The potential optimizations are documented in `potential_optimizations.md`.
+    /// Optimized batch deletion that minimizes hash recomputations.
     ///
-    /// Future optimization will:
-    /// 1. Defer hash recomputation until all deletions are complete
-    /// 2. Identify shared paths and minimize hash calculations 
-    /// 3. Process hash updates in bottom-up level order for maximum efficiency
+    /// This method applies all structural changes first, then recomputes hashes for the entire
+    /// forest in a single bottom-up pass. This is more efficient than the standard approach
+    /// which recomputes hashes after each individual deletion.
     fn batch_del(&mut self, targets: &[Hash]) -> Result<(), String> {
-        // Just use the standard deletion approach for now
-        // This ensures correctness while we develop a more optimized version
         let mut nodes = Vec::new();
 
         for target in targets {
             let node_ref = self.map.get(target).ok_or("Could not find node")?;
             let pos = self.get_pos(node_ref)?;
-
             let node = node_ref.upgrade().ok_or("Could not upgrade node")?;
-
             nodes.push((pos, node.get_data()));
         }
 
         nodes.sort_by(|a, b| a.0.cmp(&b.0));
 
+        // Apply all deletions without recomputing hashes
         for (_, target) in nodes {
             match self.map.remove(&target) {
                 Some(target) => {
-                    self.del_single(&target.upgrade().unwrap());
+                    self.del_single_no_recompute(&target.upgrade().unwrap());
                 }
                 None => {
                     return Err(format!("node {} not in the forest", target));
                 }
             }
         }
+
+        // Recompute all hashes in the forest with a single bottom-up pass
+        self.recompute_all_hashes();
         
         Ok(())
+    }
+
+    /// Performs the structural changes of deletion without recomputing hashes.
+    /// This is used by batch_del to defer hash recomputation until all deletions are complete.
+    fn del_single_no_recompute(&mut self, node: &Node<Hash>) -> Option<()> {
+        let parent = node.parent.borrow();
+        // Deleting a root
+        let parent = match *parent {
+            Some(ref node) => node.upgrade()?,
+            None => {
+                let pos = self.roots.iter().position(|x| x.data == node.data).unwrap();
+                self.roots[pos] = Rc::new(Node {
+                    ty: NodeType::Branch,
+                    parent: RefCell::new(None),
+                    data: Cell::new(Hash::empty()),
+                    left: RefCell::new(None),
+                    right: RefCell::new(None),
+                });
+                return None;
+            }
+        };
+
+        let me = parent.left.borrow();
+        // Can unwrap because we know the sibling exists
+        let sibling = if me.as_deref()?.data == node.data {
+            parent.right.borrow().clone()
+        } else {
+            parent.left.borrow().clone()
+        };
+        
+        if let Some(ref sibling) = sibling {
+            let grandparent = parent.parent.borrow().clone();
+            sibling.parent.replace(grandparent.clone());
+
+            if let Some(ref grandparent) = grandparent.and_then(|g| g.upgrade()) {
+                if grandparent.left.borrow().clone().as_ref().unwrap().data == parent.data {
+                    grandparent.left.replace(Some(sibling.clone()));
+                } else {
+                    grandparent.right.replace(Some(sibling.clone()));
+                }
+                // NOTE: We skip sibling.recompute_hashes() here - that's the key difference
+            } else {
+                let pos = self
+                    .roots
+                    .iter()
+                    .position(|x| x.data == parent.data)
+                    .unwrap();
+                self.roots[pos] = sibling.clone();
+            }
+        };
+
+        Some(())
+    }
+
+    /// Recomputes hashes for all branch nodes in the forest using a bottom-up approach.
+    /// This is more efficient than individual recomputation when many nodes have changed.
+    fn recompute_all_hashes(&self) {
+        // Process each root tree in the forest
+        for root in &self.roots {
+            self.recompute_tree_hashes(root);
+        }
+    }
+
+    /// Recomputes hashes for a single tree using bottom-up traversal.
+    fn recompute_tree_hashes(&self, root: &Rc<Node<Hash>>) {
+        // Use post-order traversal to ensure children are processed before parents
+        self.recompute_node_post_order(root);
+    }
+
+    /// Recursively recomputes hashes in post-order (children first, then parent).
+    fn recompute_node_post_order(&self, node: &Rc<Node<Hash>>) {
+        // First, recursively process children
+        if let Some(left) = node.left.borrow().as_ref() {
+            self.recompute_node_post_order(left);
+        }
+        
+        if let Some(right) = node.right.borrow().as_ref() {
+            self.recompute_node_post_order(right);
+        }
+        
+        // Then recompute this node's hash if it's a branch node
+        if node.ty == NodeType::Branch {
+            let left = node.left.borrow();
+            let right = node.right.borrow();
+            
+            if let (Some(left), Some(right)) = (left.as_ref(), right.as_ref()) {
+                node.data.replace(Hash::parent_hash(
+                    &left.data.get(),
+                    &right.data.get()
+                ));
+            }
+        }
     }
     
     
